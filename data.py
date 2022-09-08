@@ -19,4 +19,4 @@ class Data:
       self.inv_cov = np.linalg.inv(cov)
     else:
       self.cov = None
-      self.inv_cov = None
+      self.inv_cov = np.eye(len(self.x)) # inv_cov used extensively in fitting, define this way for convenience when no errors

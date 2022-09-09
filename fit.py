@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import scipy.optimize as opt
 
 from data import Data
+from plot import Plot
 
 import time
 import re
@@ -164,10 +165,7 @@ if __name__ == "__main__":
   print(np.sqrt(np.diag(fit.p_cov)))
   print(fit.chi2_ndf)
 
-  fit_result = fit(x)
-  fit_err = fit.err(x)
-
-  plt.plot(x, y)
-  plt.plot(x, fit_result)
-  plt.fill_between(x, fit_result - fit_err, fit_result + fit_err)
-  plt.show()
+  plot = Plot()
+  plot.plot(x, y, err, line = None)
+  plot.plot(x, fit(x), fit.err(x), error_mode = "band")
+  plot.save("test.pdf")

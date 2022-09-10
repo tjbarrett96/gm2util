@@ -3,9 +3,11 @@ from sympy.utilities.lambdify import implemented_function
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
+import scipy.stats as stats
 
-from data import Data
-from plot import Plot
+from gm2pal.data import Data
+from gm2pal.plot import Plot
+import gm2pal.io as io
 
 import time
 import re
@@ -49,10 +51,10 @@ class Fit:
 
     # If the sp.lambdify function is independent of x, then it returns a scalar, which doesn't match the shape of x.
     # Wrap each lambda with another lambda to ensure the result shape matches len(x) in all cases.
+    # TODO: get the computations involving these objects working elegantly with broadcasting
     self.np_expr = lambda x, *p: temp_np_expr(x, *p) * np.ones(len(x))
     self.np_jac = lambda x, *p: np.array([df_dp(x, *p) * np.ones(len(x)) for df_dp in temp_np_jac])
     self.np_hess = lambda x, *p: np.array([[df_dpdq(x, *p) * np.ones(len(x)) for df_dpdq in row] for row in temp_np_hess])
-    # TODO: get the computations involving these objects working elegantly with broadcasting
 
 # ======================================================================================================================
 
@@ -96,6 +98,7 @@ class Fit:
     self.min_chi2 = self.opt_result.fun
     self.ndf = len(self.data.y) - len(self.sp_params)
     self.chi2_ndf = self.min_chi2 / self.ndf
+    self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
 
 # ======================================================================================================================
 
@@ -126,6 +129,15 @@ class Fit:
   
 # ======================================================================================================================
 
+  # Calculate the two-sided p-value from the chi2 distribution with 'ndf' degrees of freedom.
+  def pval(self):
+    # The difference between this fit's chi2 and the mean of the distribution.
+    mean_diff = abs(self.min_chi2 - self.ndf)
+    # The total probability of drawing a chi2 sample farther from the mean on either the left or right side.
+    return stats.chi2.cdf(self.ndf - mean_diff, self.ndf) + (1 - stats.chi2.cdf(self.ndf + mean_diff, self.ndf))
+
+# ======================================================================================================================
+
   # Evaluate the model NumPy function using the optimized parameters.
   def __call__(self, x):
     return self.np_expr(x, *self.p_opt)
@@ -150,22 +162,33 @@ class Fit:
 
 # ======================================================================================================================
 
+  def print(self):
+    print(io.align(
+      rf"chi2/ndf = {self.chi2_ndf:.4f} +/- {self.err_chi2_ndf:.4f}",
+      f"p-value = {self.pval():.4f}",
+      margin = 4
+    ))
+
+# ======================================================================================================================
+
 if __name__ == "__main__":
 
-  std = 2
+  std = 5
 
-  x = np.linspace(0, 10, 1000)
+  x = np.linspace(0, 10, 100)
   y = (10 * np.cos(3*x) + x**2) + np.random.normal(0, std, size = len(x))
   err = np.ones(len(x)) * std
   data = Data(x, y, err = err)
-
   fit = Fit(data, "a * cos(b*x) + c * f(x)", definitions = {"f": x**2})
   fit.fit(hopping = True)
-  print(fit.p_opt)
-  print(np.sqrt(np.diag(fit.p_cov)))
-  print(fit.chi2_ndf)
+  fit.print()
 
   plot = Plot()
-  plot.plot(x, y, err, line = None)
-  plot.plot(x, fit(x), fit.err(x), error_mode = "band")
+  plot.plot(x, y, err, line = None, label = "Data")
+  plot.plot(x, fit(x), fit.err(x), error_mode = "band", label = "Fit")
+  plot.databox(
+    rf"$\chi^2$/ndf = {fit.chi2_ndf:.4f}",
+    "$p$-value = idk"
+  )
+  plot.labels(r"$\sigma$", "y", "Title")
   plot.save("test.pdf")

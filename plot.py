@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 
+import gm2pal.io as io
+
 # ======================================================================================================================
 
 class Plot:
@@ -52,10 +54,12 @@ class Plot:
         fmt = f"{marker if marker is not None else ''}{line if line is not None else ''}",
         ms = 4, capsize = 2, lw = 1, elinewidth = 0.5, **kwargs
       )
-    elif error_mode == "band" and y_err is not None:
-      band_plot = self.ax.fill_between(x, y - y_err, y + y_err, alpha = 0.25)
+    elif error_mode == "band":
       line_plot = self.plot(x, y, None, x_err, line, None, "bars", **kwargs)
-      return line_plot, band_plot
+      if y_err is not None:
+        band_plot = self.ax.fill_between(x, y - y_err, y + y_err, alpha = 0.25)
+        return line_plot, band_plot
+      return line_plot
     else:
       raise ValueError(f"Plot error mode '{error_mode}' must be 'bars' or 'band'.")
 
@@ -133,12 +137,13 @@ class Plot:
 # ======================================================================================================================
 
   # TODO: TeX rendering with tabular might work for alignment
-  def databox(self, *lines, left = True):
+  # TODO: find a way for legend's automatic placement to avoid text bbox
+  def databox(self, *lines):
     return self.ax.text(
-      0.03 if left else 0.97,
+      0.03,
       0.96,
-      "\n".join(lines),
-      ha = "left" if left else "right",
+      "\n".join(io.format_values(*lines, math = True)),
+      ha = "left",
       va = "top",
       transform = self.ax.transAxes,
       fontsize = self.minor_text_size

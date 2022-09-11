@@ -23,7 +23,10 @@ class Fit:
 
     # Attach custom numerical definitions (lambda expressions) to custom functions named in the 'expr' string.
     if definitions is not None:
-      custom_functions = {name: implemented_function(name, lambda x: impl) for name, impl in definitions.items()}
+      custom_functions = {
+        name: implemented_function(name, impl if callable(impl) else (lambda x: impl)) 
+        for name, impl in definitions.items()
+      }
     else:
       custom_functions = None
 
@@ -51,7 +54,6 @@ class Fit:
 
     # If the sp.lambdify function is independent of x, then it returns a scalar, which doesn't match the shape of x.
     # Wrap each lambda with another lambda to ensure the result shape matches len(x) in all cases.
-    # TODO: get the computations involving these objects working elegantly with broadcasting
     self.np_expr = lambda x, *p: temp_np_expr(x, *p) * np.ones(len(x))
     self.np_jac = lambda x, *p: np.array([df_dp(x, *p) * np.ones(len(x)) for df_dp in temp_np_jac])
     self.np_hess = lambda x, *p: np.array([[df_dpdq(x, *p) * np.ones(len(x)) for df_dpdq in row] for row in temp_np_hess])
@@ -59,6 +61,8 @@ class Fit:
 # ======================================================================================================================
 
   def fit(self, guess = None, hopping = False):
+
+    start_time = time.perf_counter()
 
     self.guess = guess if guess is not None else np.ones(len(self.sp_params))
 
@@ -91,8 +95,10 @@ class Fit:
     # Calculate the parameter covariance matrix, but only if the data had a covariance matrix -- otherwise not meaningful.
     if self.data.cov is not None:
       self.p_cov = np.linalg.inv(self.chi2_hess(self.p_opt)) # TODO: should there be a 1/2 here or not????
+      self.p_err = np.sqrt(np.diag(self.p_cov))
     else:
       self.p_cov = None
+      self.p_err = [None] * len(self.p_opt)
 
     # Calculate the minimized chi2 and chi2/ndf.
     self.min_chi2 = self.opt_result.fun
@@ -100,12 +106,15 @@ class Fit:
     self.chi2_ndf = self.min_chi2 / self.ndf
     self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
 
+    self.duration = time.perf_counter() - start_time
+
 # ======================================================================================================================
 
   # Compute the chi-squared at the given vector of parameter values.
   def chi2(self, p):
+    # TODO: only take the nonlinear parameters here, and automatically determine the linear parameters here
     res = self.np_expr(self.data.x, *p) - self.data.y
-    return (res * (self.data.inv_cov @ res)).sum()
+    return np.matmul(res, self.data.inv_cov.dot(res))
 
 # ======================================================================================================================
 
@@ -113,7 +122,7 @@ class Fit:
   def chi2_jac(self, p):
     res = self.np_expr(self.data.x, *p) - self.data.y
     jac = self.np_jac(self.data.x, *p)
-    return 2 * np.array([(jac[i] * (self.data.inv_cov @ res)).sum() for i in range(len(jac))])
+    return 2 * np.matmul(jac, self.data.inv_cov.dot(res))
 
 # ======================================================================================================================
 
@@ -122,10 +131,7 @@ class Fit:
     res = self.np_expr(self.data.x, *p) - self.data.y
     jac = self.np_jac(self.data.x, *p)
     hess = self.np_hess(self.data.x, *p)
-    return 2 * np.array([
-      [(hess[i][j] * (self.data.inv_cov @ res) + jac[i] * (self.data.inv_cov @ jac[j])).sum() for j in range(len(jac))]
-      for i in range(len(jac))
-    ])
+    return 2 * (np.matmul(hess, self.data.inv_cov.dot(res)) + np.matmul(jac, self.data.inv_cov.dot(jac.T)))
   
 # ======================================================================================================================
 
@@ -148,9 +154,7 @@ class Fit:
   def cov(self, x):
     if self.p_cov is not None:
       jac = self.np_jac(x, *self.p_opt)
-      return jac.T @ self.p_cov @ jac
-    else:
-      return None
+      return np.matmul(jac.T, np.matmul(self.p_cov, jac))
 
 # ======================================================================================================================
 
@@ -162,12 +166,24 @@ class Fit:
 
 # ======================================================================================================================
 
-  def print(self):
-    print(io.align(
-      rf"chi2/ndf = {self.chi2_ndf:.4f} +/- {self.err_chi2_ndf:.4f}",
-      f"p-value = {self.pval():.4f}",
-      margin = 4
-    ))
+  def print(self, quality = True, parameters = True):
+
+    lines = []
+
+    if parameters:
+      lines += io.format_values(*[
+        (p.name, p_opt, p_err)
+        for p, p_opt, p_err in zip(self.sp_params, self.p_opt, self.p_err)
+      ])
+
+    if quality and self.data.cov is not None:
+      lines += io.format_values(
+        ("chi2/ndf", self.chi2_ndf, self.err_chi2_ndf),
+        ("p-value", self.pval())
+      )
+
+    print(f"Fit completed in {self.duration:.{io.get_decimal_places(self.duration, 2)}f} seconds.")
+    print(io.align(*lines, margin = 4))
 
 # ======================================================================================================================
 
@@ -175,7 +191,7 @@ if __name__ == "__main__":
 
   std = 5
 
-  x = np.linspace(0, 10, 100)
+  x = np.linspace(0, 10, 200)
   y = (10 * np.cos(3*x) + x**2) + np.random.normal(0, std, size = len(x))
   err = np.ones(len(x)) * std
   data = Data(x, y, err = err)
@@ -187,8 +203,8 @@ if __name__ == "__main__":
   plot.plot(x, y, err, line = None, label = "Data")
   plot.plot(x, fit(x), fit.err(x), error_mode = "band", label = "Fit")
   plot.databox(
-    rf"$\chi^2$/ndf = {fit.chi2_ndf:.4f}",
-    "$p$-value = idk"
+    (r"$\chi^2$/ndf", fit.chi2_ndf, fit.err_chi2_ndf),
+    ("$p$-value", fit.pval())
   )
   plot.labels(r"$\sigma$", "y", "Title")
   plot.save("test.pdf")

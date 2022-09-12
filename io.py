@@ -15,8 +15,11 @@ def align(*lines, at = "=", margin = 0):
 def get_decimal_places(number, figures = 2):
   # Express the number as (d * 10^n), where 'd' is a single digit and 'n' is an integer.
   # Then log10(d * 10^n) == n + log10(d) --> floor(n + log10(d)) == n, since 0 < log10(d) < 1.
-  first_fig_place = -int(np.floor(np.log10(number)))
-  return max(0, first_fig_place + (figures - 1))
+  if number != 0:
+    first_fig_place = -int(np.floor(np.log10(abs(number))))
+    return max(0, first_fig_place + (figures - 1))
+  else:
+    return 0
 
 # ======================================================================================================================
 

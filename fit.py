@@ -40,6 +40,7 @@ class Fit:
       list(self.sp_expr.free_symbols - {self.sp_arg}),
       key = lambda p: re.search(rf"\b{p.name}\b", expr).start()
     )
+    self.str_params = [p.name for p in self.sp_params]
 
     # Compute the jacobian vector of first derivatives with respect to each parameter.
     self.sp_jac = [sp.diff(self.sp_expr, p) for p in self.sp_params]
@@ -58,20 +59,39 @@ class Fit:
     self.np_jac = lambda x, *p: np.array([df_dp(x, *p) * np.ones(len(x)) for df_dp in temp_np_jac])
     self.np_hess = lambda x, *p: np.array([[df_dpdq(x, *p) * np.ones(len(x)) for df_dpdq in row] for row in temp_np_hess])
 
+    # TODO: tidy up internal state of fixed parameters: keep lists of what's fixed and what's floating, etc.
+    self.fixed = {}
+    self.where_fixed = np.full(len(self.sp_params), False)
+    self.where_float = np.full(len(self.sp_params), True)
+    self.fixed_params = []
+    self.float_params = []
+    self.fixed_template = np.full(len(self.sp_params), np.nan)
+
 # ======================================================================================================================
 
+  # TODO: guess should be a dictionary with parameter names
   def fit(self, guess = None, hopping = False):
 
     start_time = time.perf_counter()
 
-    self.guess = guess if guess is not None else np.ones(len(self.sp_params))
+    if guess is None:
+      guess = {}
+
+    if isinstance(guess, dict):
+      float_params = [name for i, name in enumerate(self.str_params) if self.where_float[i]]
+      seeds = np.ones(len(float_params))
+      for name, value in guess:
+        index = float_params.index(name)
+        seeds[index] = value
+    else:
+      raise ValueError()
 
     # Minimize the chi-squared using BFGS, repeated with random steps in the initial conditions ("basin hopping").
     if hopping:
 
       self.opt_result = opt.basinhopping(
         self.chi2,
-        x0 = self.guess,
+        x0 = seeds,
         minimizer_kwargs = {
           "method": "BFGS",
           "jac": self.chi2_jac
@@ -102,7 +122,7 @@ class Fit:
 
     # Calculate the minimized chi2 and chi2/ndf.
     self.min_chi2 = self.opt_result.fun
-    self.ndf = len(self.data.y) - len(self.sp_params)
+    self.ndf = len(self.data.y) - len(self.float_params)
     self.chi2_ndf = self.min_chi2 / self.ndf
     self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
 
@@ -110,29 +130,41 @@ class Fit:
 
 # ======================================================================================================================
 
+  # Expand the vector 'p' of floating parameter values into the full vector of all parameter values.
+  def _insert_fixed_params(self, p):
+    # TODO: can do the linear determination here too, generally interleave nonlinear params -> full params
+    wrapped_p = self.fixed_template.copy()
+    wrapped_p[self.where_float] = p
+    return wrapped_p
+
+# ======================================================================================================================
+
   # Compute the chi-squared at the given vector of parameter values.
   def chi2(self, p):
     # TODO: only take the nonlinear parameters here, and automatically determine the linear parameters here
+    p = self._insert_fixed_params(p)
     res = self.np_expr(self.data.x, *p) - self.data.y
-    return np.matmul(res, self.data.inv_cov.dot(res))
+    return res @ (self.data.inv_cov @ res)
 
 # ======================================================================================================================
 
   # Compute the chi-squared jacobian vector (with respect to the parameters) at the given vector of parameter values.
   def chi2_jac(self, p):
+    p = self._insert_fixed_params(p)
     res = self.np_expr(self.data.x, *p) - self.data.y
-    jac = self.np_jac(self.data.x, *p)
-    return 2 * np.matmul(jac, self.data.inv_cov.dot(res))
+    jac = self.np_jac(self.data.x, *p)[self.where_float]
+    return 2 * (jac @ (self.data.inv_cov @ res))
 
 # ======================================================================================================================
 
   # Compute the chi-squared hessian matrix (with respect to the parameters) at the given vector of parameter values.
   def chi2_hess(self, p):
+    p = self._insert_fixed_params(p)
     res = self.np_expr(self.data.x, *p) - self.data.y
-    jac = self.np_jac(self.data.x, *p)
-    hess = self.np_hess(self.data.x, *p)
-    return 2 * (np.matmul(hess, self.data.inv_cov.dot(res)) + np.matmul(jac, self.data.inv_cov.dot(jac.T)))
-  
+    jac = self.np_jac(self.data.x, *p)[self.where_float]
+    hess = self.np_hess(self.data.x, *p)[self.where_float][:, self.where_float]
+    return 2 * (hess @ (self.data.inv_cov @ res) + jac @ (self.data.inv_cov @ jac.T))
+
 # ======================================================================================================================
 
   # Calculate the two-sided p-value from the chi2 distribution with 'ndf' degrees of freedom.
@@ -154,7 +186,7 @@ class Fit:
   def cov(self, x):
     if self.p_cov is not None:
       jac = self.np_jac(x, *self.p_opt)
-      return np.matmul(jac.T, np.matmul(self.p_cov, jac))
+      return jac.T @ (self.p_cov @ jac)
 
 # ======================================================================================================================
 
@@ -166,14 +198,33 @@ class Fit:
 
 # ======================================================================================================================
 
+  def fix(self, name, value):
+    self.fixed[name] = value
+    self._update_fixed()
+
+  def free(self, name):
+    del self.fixed[name]
+    self._update_fixed()
+
+  def _update_fixed(self):
+    self.where_fixed.fill(False)
+    self.fixed_template.fill(np.nan)
+    for name, value in self.fixed.items():
+      index = self.str_params.index(name)
+      self.where_fixed[index] = True
+      self.fixed_template[index] = value
+    self.where_float = ~self.where_fixed
+
+# ======================================================================================================================
+
   def print(self, quality = True, parameters = True):
 
     lines = []
 
     if parameters:
       lines += io.format_values(*[
-        (p.name, p_opt, p_err)
-        for p, p_opt, p_err in zip(self.sp_params, self.p_opt, self.p_err)
+        (p, p_opt, p_err)
+        for p, p_opt, p_err in zip([name for i, name in enumerate(self.str_params) if self.where_float[i]], self.p_opt, self.p_err)
       ])
 
     if quality and self.data.cov is not None:
@@ -199,12 +250,12 @@ if __name__ == "__main__":
   fit.fit(hopping = True)
   fit.print()
 
-  plot = Plot()
-  plot.plot(x, y, err, line = None, label = "Data")
-  plot.plot(x, fit(x), fit.err(x), error_mode = "band", label = "Fit")
-  plot.databox(
-    (r"$\chi^2$/ndf", fit.chi2_ndf, fit.err_chi2_ndf),
-    ("$p$-value", fit.pval())
-  )
-  plot.labels(r"$\sigma$", "y", "Title")
-  plot.save("test.pdf")
+  # plot = Plot()
+  # plot.plot(x, y, err, line = None, label = "Data")
+  # plot.plot(x, fit(x), fit.err(x), error_mode = "band", label = "Fit")
+  # plot.databox(
+  #   (r"$\chi^2$/ndf", fit.chi2_ndf, fit.err_chi2_ndf),
+  #   ("$p$-value", fit.pval())
+  # )
+  # plot.labels(r"$\sigma$", "y", "Title")
+  # plot.save("test.pdf")

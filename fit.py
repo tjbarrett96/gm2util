@@ -21,17 +21,20 @@ class Fit:
     # The Data object to fit, which wraps the numerical data as data.x, data.y, and data.cov.
     self.data = data
 
-    # Attach custom numerical definitions (lambda expressions) to custom functions named in the 'expr' string.
+    # Attach numerical definitions to custom functions named in the 'expr' string.
+    # May be callable single-variable functions, or discrete numeric vectors which must match the shape of the data.
+    sp_local_dict = {}
     if definitions is not None:
-      custom_functions = {
-        name: implemented_function(name, impl if callable(impl) else (lambda x: impl)) 
-        for name, impl in definitions.items()
-      }
-    else:
-      custom_functions = None
+      for name, impl in definitions.items():
+        if callable(impl):
+          sp_local_dict[name] = implemented_function(name, impl)
+        elif len(impl) == len(self.data.x):
+          sp_local_dict[name] = implemented_function(name, lambda x: impl)
+        else:
+          raise ValueError()
 
     # Parse the model function and independent variable strings into SymPy expressions.
-    self.sp_expr = sp.parse_expr(expr, local_dict = custom_functions)
+    self.sp_expr = sp.parse_expr(expr, local_dict = sp_local_dict)
     self.sp_arg = sp.Symbol(arg)
 
     # Identify the fit parameters as the set of all unbound symbols, minus the independent variable.
@@ -48,6 +51,10 @@ class Fit:
     # Compute the hessian matrix of second derivatives with respect to each pair of parameters.
     self.sp_hess = [[sp.diff(self.sp_expr, p, q) for p in self.sp_params] for q in self.sp_params]
 
+    # def np_wrap(f):
+    #   lambdified = sp.lambdify([self.sp_arg, *self.sp_params], f)
+    #   return lambda x, *p: lambdified(x, *p) * np.ones(len(x))
+
     # Convert the SymPy model function, jacobian, and hessian into NumPy functions.
     temp_np_expr = sp.lambdify([self.sp_arg, *self.sp_params], self.sp_expr)
     temp_np_jac = [sp.lambdify([self.sp_arg, *self.sp_params], df_dp) for df_dp in self.sp_jac]
@@ -59,30 +66,42 @@ class Fit:
     self.np_jac = lambda x, *p: np.array([df_dp(x, *p) * np.ones(len(x)) for df_dp in temp_np_jac])
     self.np_hess = lambda x, *p: np.array([[df_dpdq(x, *p) * np.ones(len(x)) for df_dpdq in row] for row in temp_np_hess])
 
-    # TODO: tidy up internal state of fixed parameters: keep lists of what's fixed and what's floating, etc.
+    self.where_linear = np.full(len(self.sp_params), False)
+    self.where_linear[self._identify_linear_params()] = True
+    self.where_nonlinear = ~self.where_linear
+
+    # self.sp_params_linear = [p for i, p in enumerate(self.sp_params) if self.where_linear[i]]
+    self.sp_expr_linear = 0
+    for i, p in enumerate(self.sp_params):
+      if self.where_linear[i]:
+        self.sp_expr_linear += self.sp_jac[i] * p
+    self.sp_expr_nonlinear = self.sp_expr - self.sp_expr_linear
+    
+    temp_np_expr_nonlinear = sp.lambdify([self.sp_arg] + [p for i, p in enumerate(self.sp_params) if self.where_nonlinear[i]], self.sp_expr_nonlinear)
+    self.np_expr_nonlinear = lambda x, *p: temp_np_expr_nonlinear(x, *p) * np.ones(len(x))
+
     self.fixed = {}
     self.where_fixed = np.full(len(self.sp_params), False)
     self.where_float = np.full(len(self.sp_params), True)
     self.fixed_params = []
     self.float_params = []
     self.fixed_template = np.full(len(self.sp_params), np.nan)
+    self._update_fixed()
 
 # ======================================================================================================================
 
-  # TODO: guess should be a dictionary with parameter names
+  # TODO: accept step sizes (setting scale for knowledge of initial seeds) for basin hopping
   def fit(self, guess = None, hopping = False):
 
     start_time = time.perf_counter()
 
     if guess is None:
       guess = {}
-
     if isinstance(guess, dict):
-      float_params = [name for i, name in enumerate(self.str_params) if self.where_float[i]]
-      seeds = np.ones(len(float_params))
-      for name, value in guess:
-        index = float_params.index(name)
-        seeds[index] = value
+      seeds = np.ones(len(self.float_params))
+      for i, param in enumerate(self.float_params):
+        if param in guess:
+          seeds[i] = guess[param]
     else:
       raise ValueError()
 
@@ -90,11 +109,11 @@ class Fit:
     if hopping:
 
       self.opt_result = opt.basinhopping(
-        self.chi2,
+        self._eval_chi2,
         x0 = seeds,
         minimizer_kwargs = {
           "method": "BFGS",
-          "jac": self.chi2_jac
+          "jac": self._eval_chi2_jac
         }
       ).lowest_optimization_result
 
@@ -103,54 +122,72 @@ class Fit:
       # how to use basinhopping intelligently to keep things fast? single local minimize is ~100x faster...
       # maybe try single minimization at given seed first, and proceed to basin hopping if result is poor? e.g. didn't converge, or chi2 too big?
       self.opt_result = opt.minimize(
-        self.chi2,
-        x0 = self.guess,
+        self._eval_chi2,
+        x0 = seeds,
         method = "BFGS",
-        jac = self.chi2_jac
+        jac = self._eval_chi2_jac
       )
     
     # Extract the optimized parameters from the minimization result.
-    self.p_opt = self.opt_result.x
+    self.p_opt = self._insert_fixed_params(self.opt_result.x)
 
     # Calculate the parameter covariance matrix, but only if the data had a covariance matrix -- otherwise not meaningful.
     if self.data.cov is not None:
-      self.p_cov = np.linalg.inv(self.chi2_hess(self.p_opt)) # TODO: should there be a 1/2 here or not????
+      self.p_cov = np.linalg.inv(self._eval_chi2_hess(self.opt_result.x)) # TODO: should there be a 1/2 here or not????
       self.p_err = np.sqrt(np.diag(self.p_cov))
     else:
       self.p_cov = None
       self.p_err = [None] * len(self.p_opt)
 
     # Calculate the minimized chi2 and chi2/ndf.
-    self.min_chi2 = self.opt_result.fun
-    self.ndf = len(self.data.y) - len(self.float_params)
-    self.chi2_ndf = self.min_chi2 / self.ndf
+    self.chi2 = self.opt_result.fun
+    self.ndf = len(self.data.y) - (len(self.sp_params) - len(self.fixed_params))
+    self.chi2_ndf = self.chi2 / self.ndf
     self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
+    self.pval = self._eval_pval(self.opt_result.x)
 
     self.duration = time.perf_counter() - start_time
 
 # ======================================================================================================================
 
+  def _identify_linear_params(self):
+    linear_idx = []
+    for i in range(len(self.str_params)):
+      # Check if the 2nd derivative with respect to this parameter (H_ii) is identically zero.
+      # Also check that the coeff. of this param. is independent of all other linear candidates so far, i.e. H_ij == 0.
+      if self.sp_hess[i][i] == 0 and all([self.sp_hess[i][j] == 0 for j in linear_idx]):
+        linear_idx.append(i)
+    return linear_idx
+
+# ======================================================================================================================
+
   # Expand the vector 'p' of floating parameter values into the full vector of all parameter values.
-  def _insert_fixed_params(self, p):
-    # TODO: can do the linear determination here too, generally interleave nonlinear params -> full params
+  def _insert_fixed_params(self, p_nonlinear):
+
     wrapped_p = self.fixed_template.copy()
-    wrapped_p[self.where_float] = p
+    wrapped_p[self.where_float] = p_nonlinear
+
+    jac = self.np_jac(self.data.x, *wrapped_p)[self.where_linear]
+    M = jac @ (self.data.inv_cov @ jac.T)
+    b = jac @ (self.data.inv_cov @ (self.np_expr_nonlinear(self.data.x, *p_nonlinear) - self.data.y))
+    p_linear = np.linalg.inv(M) @ (-b)
+    wrapped_p[self.where_linear] = p_linear
+
     return wrapped_p
 
 # ======================================================================================================================
 
   # Compute the chi-squared at the given vector of parameter values.
-  def chi2(self, p):
-    # TODO: only take the nonlinear parameters here, and automatically determine the linear parameters here
-    p = self._insert_fixed_params(p)
+  def _eval_chi2(self, p_nonlinear):
+    p = self._insert_fixed_params(p_nonlinear)
     res = self.np_expr(self.data.x, *p) - self.data.y
     return res @ (self.data.inv_cov @ res)
 
 # ======================================================================================================================
 
   # Compute the chi-squared jacobian vector (with respect to the parameters) at the given vector of parameter values.
-  def chi2_jac(self, p):
-    p = self._insert_fixed_params(p)
+  def _eval_chi2_jac(self, p_nonlinear):
+    p = self._insert_fixed_params(p_nonlinear)
     res = self.np_expr(self.data.x, *p) - self.data.y
     jac = self.np_jac(self.data.x, *p)[self.where_float]
     return 2 * (jac @ (self.data.inv_cov @ res))
@@ -158,19 +195,19 @@ class Fit:
 # ======================================================================================================================
 
   # Compute the chi-squared hessian matrix (with respect to the parameters) at the given vector of parameter values.
-  def chi2_hess(self, p):
-    p = self._insert_fixed_params(p)
+  def _eval_chi2_hess(self, p_nonlinear):
+    p = self._insert_fixed_params(p_nonlinear)
     res = self.np_expr(self.data.x, *p) - self.data.y
-    jac = self.np_jac(self.data.x, *p)[self.where_float]
-    hess = self.np_hess(self.data.x, *p)[self.where_float][:, self.where_float]
+    jac = self.np_jac(self.data.x, *p)#[self.where_float]
+    hess = self.np_hess(self.data.x, *p)#[self.where_float][:, self.where_float]
     return 2 * (hess @ (self.data.inv_cov @ res) + jac @ (self.data.inv_cov @ jac.T))
 
 # ======================================================================================================================
 
   # Calculate the two-sided p-value from the chi2 distribution with 'ndf' degrees of freedom.
-  def pval(self):
+  def _eval_pval(self, p_nonlinear):
     # The difference between this fit's chi2 and the mean of the distribution.
-    mean_diff = abs(self.min_chi2 - self.ndf)
+    mean_diff = abs(self._eval_chi2(p_nonlinear) - self.ndf)
     # The total probability of drawing a chi2 sample farther from the mean on either the left or right side.
     return stats.chi2.cdf(self.ndf - mean_diff, self.ndf) + (1 - stats.chi2.cdf(self.ndf + mean_diff, self.ndf))
 
@@ -208,12 +245,19 @@ class Fit:
 
   def _update_fixed(self):
     self.where_fixed.fill(False)
+    self.where_float.fill(False)
+    self.fixed_params.clear()
+    self.float_params.clear()
     self.fixed_template.fill(np.nan)
-    for name, value in self.fixed.items():
-      index = self.str_params.index(name)
-      self.where_fixed[index] = True
-      self.fixed_template[index] = value
-    self.where_float = ~self.where_fixed
+    for i, param in enumerate(self.str_params):
+      if param in self.fixed:
+        self.where_fixed[i] = True
+        self.where_float[i] = False
+        self.fixed_params.append(param)
+        self.fixed_template[i] = self.fixed[param]
+      elif self.where_nonlinear[i]:
+        self.where_float[i] = True
+        self.float_params.append(param)
 
 # ======================================================================================================================
 
@@ -222,15 +266,16 @@ class Fit:
     lines = []
 
     if parameters:
-      lines += io.format_values(*[
-        (p, p_opt, p_err)
-        for p, p_opt, p_err in zip([name for i, name in enumerate(self.str_params) if self.where_float[i]], self.p_opt, self.p_err)
-      ])
+      for i, param in enumerate(self.str_params):
+        if param in self.fixed:
+          lines.append(f"{io.format_value(param, self.fixed[param])} (fixed)")
+        else:
+          lines.append(io.format_value(param, self.p_opt[i], self.p_err[i]))
 
     if quality and self.data.cov is not None:
       lines += io.format_values(
         ("chi2/ndf", self.chi2_ndf, self.err_chi2_ndf),
-        ("p-value", self.pval())
+        ("p-value", self.pval)
       )
 
     print(f"Fit completed in {self.duration:.{io.get_decimal_places(self.duration, 2)}f} seconds.")
@@ -240,14 +285,23 @@ class Fit:
 
 if __name__ == "__main__":
 
-  std = 5
+  std = 1
 
   x = np.linspace(0, 10, 200)
   y = (10 * np.cos(3*x) + x**2) + np.random.normal(0, std, size = len(x))
   err = np.ones(len(x)) * std
   data = Data(x, y, err = err)
   fit = Fit(data, "a * cos(b*x) + c * f(x)", definitions = {"f": x**2})
-  fit.fit(hopping = True)
+  fit.fit(hopping = True, guess = {"b": 3})
+  fit.print()
+
+  fit.fix("c", 1)
+  fit.fix("a", 10)
+  fit.fit(guess = {"b": 3.1})
+  fit.print()
+
+  fit.free("a")
+  fit.fit(guess = {p: val for p, val in zip(fit.str_params, fit.p_opt)})
   fit.print()
 
   # plot = Plot()

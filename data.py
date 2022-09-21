@@ -5,7 +5,7 @@ class Data:
 
   def __init__(self, x, y, cov = None, err = None):
 
-    if cov is not None and err is not None:
+    if (cov is not None) and (err is not None):
       raise ValueError("Conflicting specification of both 'cov' and 'err'.")
 
     self.x = x

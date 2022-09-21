@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 
-import gm2pal.io as io
+import gm2util.io as io
 
 # ======================================================================================================================
 

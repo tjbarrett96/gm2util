@@ -36,6 +36,8 @@ def format_value(name, value, error = None, unit = None, math = False, decimals 
   # Generate the string "{name} = {value} +/- {error} {unit}".
   return f"{name} = {value:.{decimals}f}{error_str}{unit_str}"
 
+# ======================================================================================================================
+
 def format_values(*lines, math = False):
   return [(format_value(*line, math = math) if isinstance(line, tuple) else line) for line in lines]
 

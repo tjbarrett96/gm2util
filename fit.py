@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
 import scipy.stats as stats
+import scipy.sparse as sparse
 
 from gm2util.data import Data
 from gm2util.plot import Plot
@@ -20,6 +21,15 @@ class Fit:
 
     # The Data object to fit, which wraps the numerical data as data.x, data.y, and data.cov.
     self.data = data
+    
+    # Get the inverse covariance matrix of the data.
+    if self.data.cov is not None:
+      if sparse.issparse(self.data.cov):
+        self.inv_cov = sparse.diags(1 / self.data.cov.diagonal())
+      else:
+        self.inv_cov = np.linalg.inv(self.data.cov)
+    else:
+      self.inv_cov = np.eye(len(self.data.x))
 
     # Attach numerical definitions to custom functions named in the 'expr' string.
     # May be callable single-variable functions, or discrete numeric vectors which must match the shape of the data.
@@ -178,8 +188,8 @@ class Fit:
 
     # Invert the system of linear parameters, then fill them into the appropriate places in the parameter vector.
     jac = self.np_jac(self.data.x, *p_all)[self.where_linear]
-    M = jac @ (self.data.inv_cov @ jac.T)
-    b = jac @ (self.data.inv_cov @ (self.np_expr_nonlinear(self.data.x, *p_all[self.where_nonlinear]) - self.data.y))
+    M = jac @ (self.inv_cov @ jac.T)
+    b = jac @ (self.inv_cov @ (self.np_expr_nonlinear(self.data.x, *p_all[self.where_nonlinear]) - self.data.y))
     p_linear = np.linalg.inv(M) @ (-b)
     p_all[self.where_linear] = p_linear
 
@@ -191,7 +201,7 @@ class Fit:
   def _eval_chi2(self, p_floating):
     p_all = self._expand_floating_params(p_floating)
     res = self.np_expr(self.data.x, *p_all) - self.data.y
-    return res @ (self.data.inv_cov @ res)
+    return res @ (self.inv_cov @ res)
 
 # ======================================================================================================================
 
@@ -200,7 +210,7 @@ class Fit:
     p_all = self._expand_floating_params(p_floating)
     res = self.np_expr(self.data.x, *p_all) - self.data.y
     jac = self.np_jac(self.data.x, *p_all)[self.where_floating]
-    return 2 * (jac @ (self.data.inv_cov @ res))
+    return 2 * (jac @ (self.inv_cov @ res))
 
 # ======================================================================================================================
 
@@ -210,7 +220,7 @@ class Fit:
     res = self.np_expr(self.data.x, *p_all) - self.data.y
     jac = self.np_jac(self.data.x, *p_all)
     hess = self.np_hess(self.data.x, *p_all)
-    return 2 * (hess @ (self.data.inv_cov @ res) + jac @ (self.data.inv_cov @ jac.T))
+    return 2 * (hess @ (self.inv_cov @ res) + jac @ (self.inv_cov @ jac.T))
 
 # ======================================================================================================================
 

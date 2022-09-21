@@ -1,6 +1,8 @@
 import scipy.sparse as sparse
 import numpy as np
 
+# ======================================================================================================================
+
 class Data:
 
   def __init__(self, x, y, cov = None, err = None):
@@ -8,15 +10,19 @@ class Data:
     if (cov is not None) and (err is not None):
       raise ValueError("Conflicting specification of both 'cov' and 'err'.")
 
-    self.x = x
-    self.y = y
+    self.x = x.copy()
+    self.y = y.copy()
 
     if err is not None:
       self.cov = sparse.diags(err**2)
-      self.inv_cov = sparse.diags(1 / err**2)
     elif cov is not None:
-      self.cov = cov
-      self.inv_cov = np.linalg.inv(cov)
+      self.cov = cov.copy()
     else:
       self.cov = None
-      self.inv_cov = np.eye(len(self.x)) # inv_cov used extensively in fitting, define this way for convenience when no errors
+
+# ======================================================================================================================
+
+  def copy(self):
+    return Data(self.x, self.y, self.cov)
+
+# ======================================================================================================================

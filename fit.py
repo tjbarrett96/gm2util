@@ -51,34 +51,36 @@ class Fit:
     # Compute the hessian matrix of second derivatives with respect to each pair of parameters.
     self.sp_hess = [[sp.diff(self.sp_expr, p, q) for p in self.sp_params] for q in self.sp_params]
 
-    # def np_wrap(f):
-    #   lambdified = sp.lambdify([self.sp_arg, *self.sp_params], f)
-    #   return lambda x, *p: lambdified(x, *p) * np.ones(len(x))
-
-    # Convert the SymPy model function, jacobian, and hessian into NumPy functions.
-    temp_np_expr = sp.lambdify([self.sp_arg, *self.sp_params], self.sp_expr)
-    temp_np_jac = [sp.lambdify([self.sp_arg, *self.sp_params], df_dp) for df_dp in self.sp_jac]
-    temp_np_hess = [[sp.lambdify([self.sp_arg, *self.sp_params], df_dpdq) for df_dpdq in row] for row in self.sp_hess]
-
-    # If the sp.lambdify function is independent of x, then it returns a scalar, which doesn't match the shape of x.
-    # Wrap each lambda with another lambda to ensure the result shape matches len(x) in all cases.
-    self.np_expr = lambda x, *p: temp_np_expr(x, *p) * np.ones(len(x))
-    self.np_jac = lambda x, *p: np.array([df_dp(x, *p) * np.ones(len(x)) for df_dp in temp_np_jac])
-    self.np_hess = lambda x, *p: np.array([[df_dpdq(x, *p) * np.ones(len(x)) for df_dpdq in row] for row in temp_np_hess])
-
+    # Identify which parameters in the sorted parameter list are linear.
     self.where_linear = np.full(len(self.sp_params), False)
     self.where_linear[self._identify_linear_params()] = True
     self.where_nonlinear = ~self.where_linear
 
-    # self.sp_params_linear = [p for i, p in enumerate(self.sp_params) if self.where_linear[i]]
+    # Separate the symbolic expression into a linear part and nonlinear part (with respect to the parameters).
     self.sp_expr_linear = 0
-    for i, p in enumerate(self.sp_params):
+    for i, param in enumerate(self.sp_params):
       if self.where_linear[i]:
-        self.sp_expr_linear += self.sp_jac[i] * p
+        self.sp_expr_linear += self.sp_jac[i] * param
     self.sp_expr_nonlinear = self.sp_expr - self.sp_expr_linear
-    
-    temp_np_expr_nonlinear = sp.lambdify([self.sp_arg] + [p for i, p in enumerate(self.sp_params) if self.where_nonlinear[i]], self.sp_expr_nonlinear)
-    self.np_expr_nonlinear = lambda x, *p: temp_np_expr_nonlinear(x, *p) * np.ones(len(x))
+
+    # Helper function for converting a nested list of SymPy expressions into a NumPy function with the same structure.
+    def np_wrap(args, f):
+      if isinstance(f, list):
+        return lambda x, *p: np.array([np_wrap(args, item)(x, *p) for item in f])
+      else:
+        lambdified = sp.lambdify(args, f)
+        # Ensure the function output matches the length of x. It won't by default if the function is independent of x.
+        return lambda x, *p: lambdified(x, *p) * np.ones(len(x))
+
+    # Convert SymPy expressions into NumPy functions.
+    arg_list = [self.sp_arg, *self.sp_params]
+    self.np_expr = np_wrap(arg_list, self.sp_expr)
+    self.np_jac = np_wrap(arg_list, self.sp_jac)
+    self.np_hess = np_wrap(arg_list, self.sp_hess)
+    self.np_expr_nonlinear = np_wrap(
+      [self.sp_arg] + [p for i, p in enumerate(self.sp_params) if self.where_nonlinear[i]],
+      self.sp_expr_nonlinear
+    )
 
     self.fixed = {}
     self.where_fixed = np.full(len(self.sp_params), False)
@@ -111,6 +113,8 @@ class Fit:
       self.opt_result = opt.basinhopping(
         self._eval_chi2,
         x0 = seeds,
+        callback = lambda p, f, acc: (f/self.ndf <= 1 + self.err_chi2_ndf), # quit early if chi2/ndf within 1 sigma of mean
+        disp = True,
         minimizer_kwargs = {
           "method": "BFGS",
           "jac": self._eval_chi2_jac
@@ -141,9 +145,7 @@ class Fit:
 
     # Calculate the minimized chi2 and chi2/ndf.
     self.chi2 = self.opt_result.fun
-    self.ndf = len(self.data.y) - (len(self.sp_params) - len(self.fixed_params))
     self.chi2_ndf = self.chi2 / self.ndf
-    self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
     self.pval = self._eval_pval(self.opt_result.x)
 
     self.duration = time.perf_counter() - start_time
@@ -151,13 +153,13 @@ class Fit:
 # ======================================================================================================================
 
   def _identify_linear_params(self):
-    linear_idx = []
-    for i in range(len(self.str_params)):
+    linear_param_indices = []
+    for i in range(len(self.sp_params)):
       # Check if the 2nd derivative with respect to this parameter (H_ii) is identically zero.
       # Also check that the coeff. of this param. is independent of all other linear candidates so far, i.e. H_ij == 0.
-      if self.sp_hess[i][i] == 0 and all([self.sp_hess[i][j] == 0 for j in linear_idx]):
-        linear_idx.append(i)
-    return linear_idx
+      if self.sp_hess[i][i] == 0 and all([self.sp_hess[i][j] == 0 for j in linear_param_indices]):
+        linear_param_indices.append(i)
+    return linear_param_indices
 
 # ======================================================================================================================
 
@@ -258,6 +260,8 @@ class Fit:
       elif self.where_nonlinear[i]:
         self.where_float[i] = True
         self.float_params.append(param)
+    self.ndf = len(self.data.y) - (len(self.sp_params) - len(self.fixed_params))
+    self.err_chi2_ndf = np.sqrt(2 / self.ndf) # std. dev. of reduced chi2 distribution
 
 # ======================================================================================================================
 

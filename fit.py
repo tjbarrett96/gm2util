@@ -113,56 +113,60 @@ class Fit:
 
     start_time = time.perf_counter()
 
-    if guess is None:
-      guess = {}
-    if isinstance(guess, dict):
-      seeds = np.ones(len(self.floating_params))
-      for i, param in enumerate(self.floating_params):
-        if param in guess:
-          seeds[i] = guess[param]
-    else:
-      raise ValueError()
+    self.opt_result = None
+    if len(self.floating_params) > 0:
 
-    # Minimize the chi-squared using BFGS, repeated with random steps in the initial conditions ("basin hopping").
-    if hopping:
+      if guess is None:
+        guess = {}
+      if isinstance(guess, dict):
+        seeds = np.ones(len(self.floating_params))
+        for i, param in enumerate(self.floating_params):
+          if param in guess:
+            seeds[i] = guess[param]
+      else:
+        raise ValueError()
 
-      self.opt_result = opt.basinhopping(
-        self._eval_chi2,
-        x0 = seeds,
-        callback = lambda p, f, acc: (f/self.ndf <= 1 + self.err_chi2_ndf), # quit early if chi2/ndf within 1 sigma of mean
-        disp = True,
-        minimizer_kwargs = {
-          "method": "BFGS",
-          "jac": self._eval_chi2_jac
-        }
-      ).lowest_optimization_result
+      # Minimize the chi-squared using BFGS, repeated with random steps in the initial conditions ("basin hopping").
+      if hopping:
 
-    else:
+        self.opt_result = opt.basinhopping(
+          self._eval_chi2,
+          x0 = seeds,
+          callback = lambda p, f, acc: (f/self.ndf <= 1 + self.err_chi2_ndf), # quit early if chi2/ndf within 1 sigma of mean
+          disp = True,
+          minimizer_kwargs = {
+            "method": "BFGS",
+            "jac": self._eval_chi2_jac
+          }
+        ).lowest_optimization_result
 
-      # how to use basinhopping intelligently to keep things fast? single local minimize is ~100x faster...
-      # maybe try single minimization at given seed first, and proceed to basin hopping if result is poor? e.g. didn't converge, or chi2 too big?
-      self.opt_result = opt.minimize(
-        self._eval_chi2,
-        x0 = seeds,
-        method = "BFGS",
-        jac = self._eval_chi2_jac
-      )
+      else:
+
+        # how to use basinhopping intelligently to keep things fast? single local minimize is ~100x faster...
+        # maybe try single minimization at given seed first, and proceed to basin hopping if result is poor? e.g. didn't converge, or chi2 too big?
+        self.opt_result = opt.minimize(
+          self._eval_chi2,
+          x0 = seeds,
+          method = "BFGS",
+          jac = self._eval_chi2_jac
+        )
     
     # Extract the optimized parameters from the minimization result.
-    self.p_opt = self._expand_floating_params(self.opt_result.x)
+    p_floating_opt = self.opt_result.x if self.opt_result is not None else []
+    self.p_opt = self._expand_floating_params(p_floating_opt)
 
     # Calculate the parameter covariance matrix, but only if the data had a covariance matrix -- otherwise not meaningful.
     if self.data.cov is not None:
-      self.p_cov = np.linalg.inv(self._eval_chi2_hess(self.opt_result.x)) # TODO: should there be a 1/2 here or not????
+      self.p_cov = np.linalg.inv(self._eval_chi2_hess(p_floating_opt)) # TODO: should there be a 1/2 here or not????
       self.p_err = np.sqrt(np.diag(self.p_cov))
     else:
       self.p_cov = None
       self.p_err = [None] * len(self.p_opt)
 
     # Calculate the minimized chi2 and chi2/ndf.
-    self.chi2 = self.opt_result.fun
+    self.chi2 = self._eval_chi2(p_floating_opt)
     self.chi2_ndf = self.chi2 / self.ndf
-    self.pval = self._eval_pval(self.opt_result.x)
+    self.pval = self._eval_pval(p_floating_opt)
 
     self.duration = time.perf_counter() - start_time
 
@@ -250,7 +254,7 @@ class Fit:
   # Calculate the one-sigma error band of the optimal fitted curve evaluated at the given x values.
   def err(self, x):
     if (cov := self.cov(x)) is not None:
-      return np.sqrt(np.diag(cov))
+      return np.sqrt(cov.diagonal())
 
 # ======================================================================================================================
 
@@ -348,7 +352,7 @@ if __name__ == "__main__":
   # plot.plot(x, fit(x), fit.err(x), error_mode = "band", label = "Fit")
   # plot.databox(
   #   (r"$\chi^2$/ndf", fit.chi2_ndf, fit.err_chi2_ndf),
-  #   ("$p$-value", fit.pval())
+  #   ("$p$-value", fit.pval)
   # )
   # plot.labels(r"$\sigma$", "y", "Title")
   # plot.save("test.pdf")

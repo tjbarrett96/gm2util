@@ -23,7 +23,8 @@ class Fit:
     self.data = data
     
     # Get the inverse covariance matrix of the data.
-    if self.data.cov is not None:
+    self.data_errors_present = (self.data.err() is not None)
+    if self.data_errors_present:
       if sparse.issparse(self.data.cov):
         self.inv_cov = sparse.diags(1 / self.data.cov.diagonal())
       else:
@@ -156,12 +157,12 @@ class Fit:
     self.p_opt = self._expand_floating_params(p_floating_opt)
 
     # Calculate the parameter covariance matrix, but only if the data had a covariance matrix -- otherwise not meaningful.
-    if self.data.cov is not None:
+    if self.data_errors_present:
       self.p_cov = np.linalg.inv(self._eval_chi2_hess(p_floating_opt)) # TODO: should there be a 1/2 here or not????
-      self.p_err = np.sqrt(np.diag(self.p_cov))
+      self.p_err = np.sqrt(self.p_cov.diagonal())
     else:
       self.p_cov = None
-      self.p_err = [None] * len(self.p_opt)
+      self.p_err = None
 
     # Calculate the minimized chi2 and chi2/ndf.
     self.chi2 = self._eval_chi2(p_floating_opt)
@@ -313,9 +314,9 @@ class Fit:
         if param in self.fixed:
           lines.append(f"{io.format_value(param, self.fixed[param])} (fixed)")
         else:
-          lines.append(io.format_value(param, self.p_opt[i], self.p_err[i]))
+          lines.append(io.format_value(param, self.p_opt[i], self.p_err[i] if self.p_err is not None else None))
 
-    if quality and self.data.cov is not None:
+    if quality and self.data_errors_present:
       lines += io.format_values(
         ("chi2/ndf", self.chi2_ndf, self.err_chi2_ndf),
         ("p-value", self.pval)

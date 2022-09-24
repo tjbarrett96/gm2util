@@ -13,7 +13,7 @@ import gm2util.io as io
 import time
 import re
 
-# ======================================================================================================================
+# ==================================================================================================
 
 class Fit:
 
@@ -33,7 +33,7 @@ class Fit:
       self.inv_cov = np.eye(len(self.data.x))
 
     # Attach numerical definitions to custom functions named in the 'expr' string.
-    # May be callable single-variable functions, or discrete numeric vectors which must match the shape of the data.
+    # May be callable single-variable functions, or discrete numeric vectors.
     sym_local_dict = {}
     if definitions is not None:
       for name, definition in definitions.items():
@@ -49,7 +49,7 @@ class Fit:
     self.sym_arg = sp.Symbol(arg)
 
     # Identify the fit parameters as the set of all unbound symbols, minus the independent variable.
-    # Convert the set into an ordered list, and sort by order of appearance within the user's function string.
+    # Convert the set into an ordered list, and sort by order of appearance within the string.
     self.sym_params = sorted(
       list(self.sym_expr.free_symbols - {self.sym_arg}),
       key = lambda p: re.search(rf"\b{p.name}\b", expr).start()
@@ -70,7 +70,7 @@ class Fit:
     self.linear_params = [p for i, p in enumerate(self.sym_params) if self.where_linear[i]]
     self.nonlinear_params = [p for i, p in enumerate(self.sym_params) if self.where_nonlinear[i]]
 
-    # Separate the symbolic expression into a linear part and nonlinear part (with respect to the parameters).
+    # Separate the expression into a linear part and nonlinear part (with respect to the parameters).
     self.sym_expr_linear = 0
     for i, param in enumerate(self.sym_params):
       if self.where_linear[i]:
@@ -95,19 +95,19 @@ class Fit:
       self.sym_expr_nonlinear
     )
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Helper function for converting a nested list of SymPy expressions into a NumPy function with the same structure.
+  # Helper for converting a nested list of SymPy expressions into a NumPy function with the same structure.
   @staticmethod
   def _sympy_to_numpy(sym_args_list, sym_expr):
     if isinstance(sym_expr, list):
       return lambda x, *p: np.array([Fit._sympy_to_numpy(sym_args_list, item)(x, *p) for item in sym_expr])
     else:
       numpy_function = sp.lambdify(sym_args_list, sym_expr)
-      # Ensure the function output matches the length of x. It won't by default if the function is independent of x.
+      # Ensure the function output matches the length of x, in case the function is independent of x.
       return lambda x, *p: numpy_function(x, *p) * np.ones(len(x))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # TODO: accept step sizes (setting scale for knowledge of initial seeds) for basin hopping
   def fit(self, guess = None, hopping = False):
@@ -156,9 +156,10 @@ class Fit:
     p_floating_opt = self.opt_result.x if self.opt_result is not None else []
     self.p_opt = self._expand_floating_params(p_floating_opt)
 
-    # Calculate the parameter covariance matrix, but only if the data had a covariance matrix -- otherwise not meaningful.
+    # Calculate the parameter covariance matrix, but only if meaningful.
     if self.data_errors_present:
-      self.p_cov = np.linalg.inv(self._eval_chi2_hess(p_floating_opt)) # TODO: should there be a 1/2 here or not????
+      # TODO: should there be a 1/2 here or not????
+      self.p_cov = np.linalg.inv(self._eval_chi2_hess(p_floating_opt))
       self.p_err = np.sqrt(self.p_cov.diagonal())
     else:
       self.p_cov = None
@@ -171,7 +172,7 @@ class Fit:
 
     self.duration = time.perf_counter() - start_time
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def _identify_linear_params(self):
     linear_param_indices = []
@@ -182,16 +183,16 @@ class Fit:
         linear_param_indices.append(i)
     return linear_param_indices
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Expand the vector of floating parameter values into the full vector of all parameters (incl. fixed and linear).
+  # Expand the vector of floating parameter values into the vector of all parameters.
   def _expand_floating_params(self, p_floating):
 
-    # Start with copy of parameter vector with fixed values filled-in, then fill in the supplied floating values.
+    # Start with copy of parameter vector with fixed values filled-in, then fill in floating values.
     p_all = self.param_template.copy()
     p_all[self.where_floating] = p_floating
 
-    # Invert the system of linear parameters, then fill them into the appropriate places in the parameter vector.
+    # Invert the system of linear parameters, then fill them into the parameter vector.
     jac = self.np_jac(self.data.x, *p_all)[self.where_linear]
     M = jac @ (self.inv_cov @ jac.T)
     b = jac @ (self.inv_cov @ (self.np_expr_nonlinear(self.data.x, *p_all[self.where_nonlinear]) - self.data.y))
@@ -200,7 +201,7 @@ class Fit:
 
     return p_all
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Compute the chi-squared at the given vector of parameter values.
   def _eval_chi2(self, p_floating):
@@ -208,18 +209,18 @@ class Fit:
     res = self.np_expr(self.data.x, *p_all) - self.data.y
     return res @ (self.inv_cov @ res)
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Compute the chi-squared jacobian vector (with respect to the parameters) at the given vector of parameter values.
+  # Compute the chi-squared jacobian vector at the given vector of parameter values.
   def _eval_chi2_jac(self, p_floating):
     p_all = self._expand_floating_params(p_floating)
     res = self.np_expr(self.data.x, *p_all) - self.data.y
     jac = self.np_jac(self.data.x, *p_all)[self.where_floating]
     return 2 * (jac @ (self.inv_cov @ res))
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Compute the chi-squared hessian matrix (with respect to the parameters) at the given vector of parameter values.
+  # Compute the chi-squared hessian matrix at the given vector of parameter values.
   def _eval_chi2_hess(self, p_floating):
     p_all = self._expand_floating_params(p_floating)
     res = self.np_expr(self.data.x, *p_all) - self.data.y
@@ -227,7 +228,7 @@ class Fit:
     hess = self.np_hess(self.data.x, *p_all)
     return 2 * (hess @ (self.inv_cov @ res) + jac @ (self.inv_cov @ jac.T))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Calculate the two-sided p-value from the chi2 distribution with 'ndf' degrees of freedom.
   def _eval_pval(self, p_floating):
@@ -236,13 +237,13 @@ class Fit:
     # The total probability of drawing a chi2 sample farther from the mean on either the left or right side.
     return stats.chi2.cdf(self.ndf - mean_diff, self.ndf) + (1 - stats.chi2.cdf(self.ndf + mean_diff, self.ndf))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Evaluate the model NumPy function using the optimized parameters.
   def __call__(self, x):
     return self.np_expr(x, *self.p_opt)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Calculate the covariance matrix of the optimal fitted curve evaluated at the given x values.
   def cov(self, x):
@@ -250,28 +251,28 @@ class Fit:
       jac = self.np_jac(x, *self.p_opt)
       return jac.T @ (self.p_cov @ jac)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Calculate the one-sigma error band of the optimal fitted curve evaluated at the given x values.
   def err(self, x):
     if (cov := self.cov(x)) is not None:
       return np.sqrt(cov.diagonal())
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Fix the given parameter name to the given value.
   def fix(self, name, value):
     self.fixed[name] = value
     self._update_fixed()
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Free the given parameter name from a previously fixed value.
   def free(self, name):
     del self.fixed[name]
     self._update_fixed()
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Update the internal state of fixed and floating parameters.
   def _update_fixed(self):
@@ -293,17 +294,17 @@ class Fit:
         self.where_floating[i] = True
         self.floating_params.append(param)
 
-    # Update the number of degrees of freedom, since the number of floating parameters may have changed.
+    # Update the degrees of freedom, since the number of floating parameters may have changed.
     self._update_ndf()
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Update the number of degrees of freedom and one-sigma width of the reduced chi2 distribution.
   def _update_ndf(self):
     self.ndf = len(self.data.y) - (len(self.sym_params) - len(self.fixed_params))
     self.err_chi2_ndf = np.sqrt(2 / self.ndf)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def print(self, quality = True, parameters = True):
 
@@ -325,7 +326,7 @@ class Fit:
     print(f"Fit completed in {self.duration:.{io.get_decimal_places(self.duration, 2)}f} seconds.")
     print(io.align(*lines, margin = 4))
 
-# ======================================================================================================================
+# ==================================================================================================
 
 if __name__ == "__main__":
 

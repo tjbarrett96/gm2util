@@ -1,6 +1,6 @@
 import numpy as np
 
-# ======================================================================================================================
+# ==================================================================================================
 
 def align(*lines, at = "=", margin = 0):
   split_lines = [line.split(at, 1) for line in lines]
@@ -10,7 +10,7 @@ def align(*lines, at = "=", margin = 0):
     for split_line in split_lines
   )
 
-# ======================================================================================================================
+# ==================================================================================================
 
 def get_decimal_places(number, figures = 2):
   # Express the number as (d * 10^n), where 'd' is a single digit and 'n' is an integer.
@@ -21,11 +21,11 @@ def get_decimal_places(number, figures = 2):
   else:
     return 0
 
-# ======================================================================================================================
+# ==================================================================================================
 
 def format_value(name, value, error = None, unit = None, math = False, decimals = None):
 
-  # Determine how many decimal places are needed for the error to show 2 significant figures (or value, if no error).
+  # Determine how many decimal places are needed for the error to show 2 sig figs (or value, if no error).
   if decimals is None:
     decimals = get_decimal_places(error if error is not None else value, 2)
 
@@ -36,9 +36,9 @@ def format_value(name, value, error = None, unit = None, math = False, decimals 
   # Generate the string "{name} = {value} +/- {error} {unit}".
   return f"{name} = {value:.{decimals}f}{error_str}{unit_str}"
 
-# ======================================================================================================================
+# ==================================================================================================
 
 def format_values(*lines, math = False):
   return [(format_value(*line, math = math) if isinstance(line, tuple) else line) for line in lines]
 
-# ======================================================================================================================
+# ==================================================================================================

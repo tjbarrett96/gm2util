@@ -4,7 +4,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 import gm2util.io as io
 
-# ======================================================================================================================
+# ==================================================================================================
 
 class Plot:
 
@@ -35,7 +35,7 @@ class Plot:
     # Set the rule for switching tick labels to scientific notation.
     self.ax.ticklabel_format(scilimits = (-2, 5), useMathText = True)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def plot(
     self,
@@ -63,21 +63,27 @@ class Plot:
     else:
       raise ValueError(f"Plot error mode '{error_mode}' must be 'bars' or 'band'.")
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def draw_horizontal(self, y = 0, line = ":", color = "k", **kwargs):
     return self.ax.axhline(y, linestyle = line, color = color, **kwargs)
 
+# ==================================================================================================
+
   def draw_vertical(self, x = 0, line = ":", color = "k", **kwargs):
     return self.ax.axvline(x, linestyle = line, color = color, **kwargs)
+
+# ==================================================================================================
 
   def horizontal_spread(self, width, y = 0, color = "k", **kwargs):
     return self.ax.axhspan(y - width/2, y + width/2, color = color, alpha = 0.1, **kwargs)
 
+# ==================================================================================================
+
   def vertical_spread(self, width, x = 0, color = "k", **kwargs):
     return self.ax.axvspan(x - width/2, x + width/2, color = color, alpha = 0.1, **kwargs)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def extend_x(self, factor = 0.15, left = False):
     left, right = self.ax.get_xlim()
@@ -88,6 +94,8 @@ class Plot:
       right += extend_amount
     self.ax.set_xlim(left, right)
 
+# ==================================================================================================
+
   def extend_y(self, factor = 0.1, bottom = False):
     bottom, top = self.ax.get_ylim()
     extend_amount = factor * (top - bottom)
@@ -97,12 +105,12 @@ class Plot:
       top += extend_amount
     self.ax.set_ylim(bottom, top)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def legend(self, **kwargs):
     # Get the artist handles and text labels for everything in the current plot.
     handles, labels = self.ax.get_legend_handles_labels()
-    # Make a dictionary mapping labels to handles; this ensures each label only appears with one handle.
+    # Make a dictionary mapping labels to handles; this ensures each label appears with one handle.
     labels_to_handles = {label: handle for label, handle in zip(labels, handles)}
     # Make a legend, as long as there are some labels to show.
     if len(labels_to_handles) > 0:
@@ -116,16 +124,22 @@ class Plot:
         **kwargs
       )
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def title(self, title):
     return self.ax.set_title(title, fontsize = self.major_text_size)
 
+# ==================================================================================================
+
   def xlabel(self, label):
     return self.ax.set_xlabel(label, ha = "right", x = 1, fontsize = self.major_text_size)
 
+# ==================================================================================================
+
   def ylabel(self, label):
     return self.ax.set_ylabel(label, ha = "right", y = 1, fontsize = self.major_text_size)
+
+# ==================================================================================================
 
   def labels(self, xlabel, ylabel, title = None):
     if title is not None:
@@ -134,7 +148,7 @@ class Plot:
     self.ylabel(ylabel)
     self.legend()
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # TODO: TeX rendering with tabular might work for alignment
   # TODO: find a way for legend's automatic placement to avoid text bbox
@@ -149,11 +163,13 @@ class Plot:
       fontsize = self.minor_text_size
     )
 
-# ======================================================================================================================
+# ==================================================================================================
 
   @staticmethod
   def make_pdf(path):
     return PdfPages(path)
+
+# ==================================================================================================
 
   def save(self, output):
     if isinstance(output, (str, PdfPages)):

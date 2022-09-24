@@ -2,10 +2,10 @@ from tkinter import Label
 import scipy.sparse as sparse
 import numpy as np
 
-import gm2util.pyutil as pyutil
-#root = pyutil.try_import("ROOT")
+import gm2util.helpers as helpers
+#root = helpers.try_import("ROOT")
 
-# ======================================================================================================================
+# ==================================================================================================
 
 class Data:
 
@@ -27,12 +27,12 @@ class Data:
     else:
       self.cov = sparse.csr_matrix((self.length, self.length))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def copy(self):
     return Data(self.x, self.y, self.cov)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def _ensure_compatibility(self, other, cross_cov = None):
     if not isinstance(other, Data):
@@ -42,20 +42,20 @@ class Data:
     if cross_cov is not None and cross_cov.shape != (self.length, self.length):
       raise ValueError("Cross-covariance of Data objects inconsistent with Data shapes.")
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place negation of y-values.
   def negate(self):
     self.y *= -1
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the (unary) - operator, returning a new Data object.
   def __neg__(self):
     return self.copy().negate()
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place addition of y-values with another compatible Data object.
   def add(self, other, cross_cov = None):
@@ -66,46 +66,46 @@ class Data:
       self.cov = self.cov + 2 * cross_cov
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the += operator.
   def __iadd__(self, other):
     return self.add(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the + operator, returning a new Data object.
   def __add__(self, other):
     return self.copy().add(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place subtraction of y-values with another compatible Data object.
   def subtract(self, other, cross_cov = None):
     return self.add(-other, -cross_cov if cross_cov is not None else None)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the -= operator.
   def __isub__(self, other):
     return self.subtract(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the - operator, returning a new Data object.
   def __sub__(self, other):
     return self.copy().subtract(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Helper function for frequently-used pattern: np.outer(a, b) * cov_matrix, handling sparse/non-sparse cases.
-  # If argument 'v' is a single array, use outer product with self, else if a tuple of 2 arrays, use those two.
+  # Helper for frequent pattern: np.outer(a, b) * cov_matrix, handling sparse/non-sparse cases.
+  # If 'v' is a single array, use outer product with self, else if a tuple of 2 arrays, use those.
   @staticmethod
   def _outer_times_cov(v, cov):
-    a, b = (v if pyutil.is_iterable(v, 2) else v, v)
+    a, b = (v if helpers.is_iterable(v, 2) else v, v)
     return cov * (np.outer(a, b) if not sparse.issparse(cov) else sparse.diags(a * b))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place multiplication of y-values with another compatible Data object.
   def multiply(self, other, cross_cov = None):
@@ -117,19 +117,19 @@ class Data:
     self.y = self.y * other.y
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the *= operator.
   def __imul__(self, other):
     return self.multiply(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the * operator, returning a new Data object.
   def __mul__(self, other):
     return self.copy().multiply(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place division of y-values with another compatible Data object.
   def divide(self, other, cross_cov = None):
@@ -142,19 +142,19 @@ class Data:
     self.y = self.y / other.y
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the /= operator.
   def __itruediv__(self, other):
     return self.divide(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the / operator, returning a new Data object.
   def __truediv__(self, other):
     return self.copy().divide(other)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # In-place exponentiation of y-values with a scalar constant.
   def power(self, n):
@@ -162,26 +162,26 @@ class Data:
     self.y = self.y ** n
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the **= operator.
   def __ipow__(self, n):
     return self.power(n)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Override the ** operator, returning a new Data object.
   def __pow__(self, n):
     return self.copy().power(n)
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Compute the error vector from the diagonal of the covariance matrix. Return None if all zero.
   def err(self):
     errors = np.sqrt(self.cov.diagonal())
     return errors if np.any(errors != 0) else None
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Remap x-values according to the given function, which must be monotonic.
   def map(self, function):
@@ -197,24 +197,25 @@ class Data:
       raise ValueError("Remapped x-values must be monotonic.")
     return self
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Integrate y(x) using Simpson's rule for quadratic interpolation.
-  # SciPy offers this algorithm, but we need internal details in order to propagate errors, so it is reimplemented here.
+  # SciPy offers this, but we need internal details to propagate errors, so reimplement here.
   def integrate(self, error = False):
 
     dx = np.diff(self.x) # Interval widths.
-    w = np.zeros(len(self.x)) # Weights for each y-value in the linear combination for Simpson's rule.
+    w = np.zeros(len(self.x)) # Weights for each y-value in the linear combination.
 
-    # Integrate parabolic interpolation of 3 points (start, mid, end), then step by 2 so that end -> start for next group.
-    # Keep a running total of the weight each y-value contributes, since start/end will enter multiple groups.
+    # Integrate parabolic interpolation of 3 points (start, mid, end).
+    # Then step by 2 so that end -> start for next group.
+    # Keep a running total of the weight each y-value contributes.
     for i in range(0, len(w) - 2, 2):
       c = (dx[i] + dx[i+1]) / 6
-      w[i] += c * (2 - dx[i+1] / dx[i]) # 'start' point contributes y[i] * w[i] to area.
-      w[i+1] += c * (dx[i] + dx[i+1])**2 / (dx[i] * dx[i+1]) # 'mid' point contributes y[i+1] * w[i+1] to area.
-      w[i+2] += c * (2 - dx[i] / dx[i+1]) # 'end' point contributes y[i+2] * w[i+2] to area.
+      w[i] += c * (2 - dx[i+1] / dx[i])
+      w[i+1] += c * (dx[i] + dx[i+1])**2 / (dx[i] * dx[i+1])
+      w[i+2] += c * (2 - dx[i] / dx[i+1])
 
-    # If there's an even number of points, treat the last incomplete interval using a trapezoid rule.
+    # If there's an even number of points, treat the last interval using a trapezoid rule.
     if len(w) % 2 == 0:
       w[-2] += dx[-1] / 2
       w[-1] += dx[-1] / 2
@@ -223,7 +224,7 @@ class Data:
     result = w @ self.y
     return result if not error else (result, np.sqrt(w @ (self.cov @ w)))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def mean(self, weights = None, error = False):
 
@@ -233,9 +234,13 @@ class Data:
     total = np.sum(weights)
     mean = (weights @ self.y) / total
 
-    return mean if not error else (mean, np.sqrt(weights @ (self.cov @ weights)) / total)
+    if not error:
+      return mean
+    else:
+      mean_err = np.sqrt(weights @ (self.cov @ weights)) / total
+      return mean, mean_err
 
-# ======================================================================================================================
+# ==================================================================================================
 
   def std(self, weights = None, error = False):
 
@@ -246,7 +251,7 @@ class Data:
     mean = self.mean(weights, error = False)
     var = weights @ (self.y - mean)**2 / total
     std = np.sqrt(var)
-    
+
     if not error:
       return std
     else:
@@ -255,17 +260,17 @@ class Data:
       std_err = var_err / (2 * std)
       return std, std_err
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # TODO: spline interpolation, optional order, optional smoothing. store spline obj from original data, re-use if already exists.
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # TODO: plot
 
-# ======================================================================================================================
+# ==================================================================================================
 
-  # Return a dictionary representation of the x, y, and covariance data, with optional label as a prefix on the keys.
+  # Return a dictionary of the x, y, and cov data, with optional label as a prefix on the keys.
   def _data_dict(self, label = None):
     prefix = "" if label is None else f"{label}/"
     return {
@@ -274,13 +279,13 @@ class Data:
       f"{prefix}cov": self.cov # TODO: will this work with sparse cov?
     }
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Save the Data object to disk in NumPy format.
   def save(self, filename, label = None):
     np.savez(filename, **self._data_dict(label))
 
-# ======================================================================================================================
+# ==================================================================================================
 
   # Load a Data object saved to disk in NumPy format.
   @staticmethod
@@ -292,7 +297,7 @@ class Data:
     cov = data[f"{prefix}cov"]
     return Data(x, y, cov)
 
-# ======================================================================================================================
+# ==================================================================================================
 
 if __name__ == "__main__":
 

@@ -39,27 +39,30 @@ class Plot:
 
   def plot(
     self,
-    x,
-    y,
-    y_err = None,
-    x_err = None,
+    data,
     line = "-",
     marker = "o",
     error_mode = "bars",
     **kwargs
   ):
-    if error_mode == "bars":
+
+    if error_mode in ("bars", None):
+
       return self.ax.errorbar(
-        x, y, y_err, x_err,
+        data.x, data.y, data.err() if error_mode is not None else None,
         fmt = f"{marker if marker is not None else ''}{line if line is not None else ''}",
         ms = 4, capsize = 2, lw = 1, elinewidth = 0.5, **kwargs
       )
+
     elif error_mode == "band":
-      line_plot = self.plot(x, y, None, x_err, line, None, "bars", **kwargs)
-      if y_err is not None:
-        band_plot = self.ax.fill_between(x, y - y_err, y + y_err, alpha = 0.25)
+
+      line_plot = self.plot(data, line, marker, error_mode = None, **kwargs)
+      if y_err := data.err() is not None:
+        band_plot = self.ax.fill_between(data.x, data.y - y_err, data.y + y_err, alpha = 0.25)
         return line_plot, band_plot
+
       return line_plot
+
     else:
       raise ValueError(f"Plot error mode '{error_mode}' must be 'bars' or 'band'.")
 
@@ -152,6 +155,7 @@ class Plot:
 
   # TODO: TeX rendering with tabular might work for alignment
   # TODO: find a way for legend's automatic placement to avoid text bbox
+  # TODO: allow for multiple databoxes, with transparent bounding boxes, stacked below each other
   def databox(self, *lines):
     return self.ax.text(
       0.03,

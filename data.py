@@ -1,14 +1,20 @@
-from tkinter import Label
+# Standard library imports.
+from numbers import Number
+
+# External library imports.
 import scipy.sparse as sparse
 import numpy as np
 
-import gm2util.helpers as helpers
-#root = helpers.try_import("ROOT")
+# Internal imports.
+import gm2util.help as help
+from gm2util.plot import Plot
 
 # ==================================================================================================
 
 class Data:
 
+  # TODO: accept labels and units for x and y, for automatic plotting of self
+  # TODO: maybe whole Quantity object which defines string labels, units, ref value, limits, etc.
   def __init__(self, x, y, cov = None, err = None):
 
     if len(x) != len(y):
@@ -34,19 +40,54 @@ class Data:
 
 # ==================================================================================================
 
-  def _ensure_compatibility(self, other, cross_cov = None):
-    if not isinstance(other, Data):
-      raise ValueError(f"Cannot add object of type {type(other)} to Data object.")
-    if np.any(self.x != other.x):
-      raise ValueError("Data objects' x-values do not match.")
-    if cross_cov is not None and cross_cov.shape != (self.length, self.length):
-      raise ValueError("Cross-covariance of Data objects inconsistent with Data shapes.")
+  def _ensure_compatibility(self, other_val, other_cov, cross_cov):
+
+    # If the other value is a numeric scalar...
+    if isinstance(other_val, Number):
+
+      # Ensure 'other_cov' is also a numeric scalar.
+      if other_cov is None:
+        other_cov = 0
+      elif not isinstance(other_cov, Number):
+        raise ValueError()
+      
+      # Ensure 'cross_cov' is a compatible 1-d array which can be broadcasted to a 2-d matrix.
+      if cross_cov is None:
+        cross_cov = 0
+      elif other_cov == 0:
+        # If 'other_cov' is 0, then 'cross_cov' doesn't make sense.
+        raise ValueError()
+      elif isinstance(cross_cov, np.ndarray) and cross_cov.shape == (len(self.x),):
+        # Add a new axis so that 'cross_cov' broadcasts as 2-d matrix with first column repeated.
+        cross_cov = cross_cov[:, None]
+      else:
+        raise ValueError()
+      
+    # If the other value is a Data object whose shape matches this one...
+    elif isinstance(other_val, Data) and np.all(other_val.x == self.x):
+
+      # Take 'other_val' and 'other_cov' from Data object.
+      other_val, other_cov = other_val.y, other_val.cov
+
+      # Ensure 'cross_cov' is a compatible 2-d matrix.
+      if cross_cov is None:
+        cross_cov = 0
+      elif np.all(other_cov.diagonal() == 0):
+        # If other values' variances are all 0, then 'cross_cov' doesn't make sense.
+        raise ValueError()
+      elif not (isinstance(cross_cov, np.ndarray) and cross_cov.shape == self.cov.shape):
+        raise ValueError()
+      
+    else:
+      raise ValueError()
+    
+    return other_val, other_cov, cross_cov
 
 # ==================================================================================================
 
   # In-place negation of y-values.
   def negate(self):
-    self.y *= -1
+    self.y = -1 * self.y
     return self
 
 # ==================================================================================================
@@ -58,12 +99,10 @@ class Data:
 # ==================================================================================================
 
   # In-place addition of y-values with another compatible Data object.
-  def add(self, other, cross_cov = None):
-    self._ensure_compatibility(other, cross_cov)
-    self.y = self.y + other.y
-    self.cov = self.cov + other.cov
-    if cross_cov is not None:
-      self.cov = self.cov + 2 * cross_cov
+  def add(self, other_val, other_cov = None, cross_cov = None):
+    other_val, other_cov, cross_cov = self._ensure_compatibility(other_val, other_cov, cross_cov)
+    self.y = self.y + other_val
+    self.cov = self.cov + cross_cov + np.transpose(cross_cov) + other_cov
     return self
 
 # ==================================================================================================
@@ -81,8 +120,8 @@ class Data:
 # ==================================================================================================
 
   # In-place subtraction of y-values with another compatible Data object.
-  def subtract(self, other, cross_cov = None):
-    return self.add(-other, -cross_cov if cross_cov is not None else None)
+  def subtract(self, other_val, other_cov = None, cross_cov = None):
+    return self.add(-other_val, other_cov, -cross_cov if cross_cov is not None else None)
 
 # ==================================================================================================
 
@@ -102,19 +141,21 @@ class Data:
   # If 'v' is a single array, use outer product with self, else if a tuple of 2 arrays, use those.
   @staticmethod
   def _outer_times_cov(v, cov):
-    a, b = (v if helpers.is_iterable(v, 2) else v, v)
-    return cov * (np.outer(a, b) if not sparse.issparse(cov) else sparse.diags(a * b))
+    a, b = (v if help.is_iterable(v, 2) else v, v)
+    if np.all(cov == 0):
+      # Shortcut in case covariance matrix is 0.
+      return 0
+    else:
+      return cov * (np.outer(a, b) if not sparse.issparse(cov) else sparse.diags(a * b))
 
 # ==================================================================================================
 
   # In-place multiplication of y-values with another compatible Data object.
-  def multiply(self, other, cross_cov = None):
-    self._ensure_compatibility(other, cross_cov)
-    self.cov = Data._outer_times_cov(other.y, self.cov) + Data._outer_times_cov(self.y, other.cov)
-    if cross_cov is not None:
-      temp = Data._outer_times_cov((self.y, other.y), cross_cov)
-      self.cov = self.cov + (temp + temp.T)
-    self.y = self.y * other.y
+  def multiply(self, other_val, other_cov = None, cross_cov = None):
+    other_val, other_cov, cross_cov = self._ensure_compatibility(other_val, other_cov, cross_cov)
+    cross_term = Data._outer_times_cov((self.y, other_val), cross_cov)
+    self.cov = Data._outer_times_cov(other_val, self.cov) + cross_term + np.transpose(cross_term) + Data._outer_times_cov(other_val, other_cov)
+    self.y = self.y * other_val
     return self
 
 # ==================================================================================================
@@ -132,14 +173,12 @@ class Data:
 # ==================================================================================================
 
   # In-place division of y-values with another compatible Data object.
-  def divide(self, other, cross_cov = None):
+  def divide(self, other_val, other_cov = None, cross_cov = None):
     # TODO: what to do about division by zero...
-    self._ensure_compatibility(other, cross_cov)
-    self.cov = Data._outer_times_cov(1 / other.y, self.cov) + Data._outer_times_cov(self.y / other.y**2, other.cov)
-    if cross_cov is not None:
-      temp = Data._outer_times_cov((1 / other.y, self.y / other.y**2), cross_cov)
-      self.cov = self.cov - (temp + temp.T)
-    self.y = self.y / other.y
+    other_val, other_cov, cross_cov = self._ensure_compatibility(other_val, other_cov, cross_cov)
+    cross_term = Data._outer_times_cov((1 / other_val, self.y / other_val**2), cross_cov)
+    self.cov = Data._outer_times_cov(1 / other_val, self.cov) - cross_term - np.transpose(cross_term) + Data._outer_times_cov(self.y / other_val**2, other_cov)
+    self.y = self.y / other_val
     return self
 
 # ==================================================================================================
@@ -262,11 +301,28 @@ class Data:
 
 # ==================================================================================================
 
-  # TODO: spline interpolation, optional order, optional smoothing. store spline obj from original data, re-use if already exists.
+  # TODO: spline interpolation, optional order, optional smoothing.
+  # store spline object from original data, re-use if already exists.
 
 # ==================================================================================================
 
-  # TODO: plot
+  def plot(self, plot = None, stats = False, **kwargs):
+
+    if plot is None:
+      plot = Plot()
+
+    plot.plot(self, **kwargs)
+    if stats:
+      mean, mean_err = self.mean(error = True)
+      std, std_err = self.std(error = True)
+      plot.draw_horizontal(mean)
+      plot.horizontal_spread(std, mean)
+      # plot.databox(
+      #   ("mean", mean, mean_err),
+      #   ("std", std, std_err)
+      # )
+
+    return plot
 
 # ==================================================================================================
 
